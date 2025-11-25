@@ -1,0 +1,995 @@
+# .github/workflows/build-android.yml
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+        
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      
+    - name: Create project structure
+      run: |
+        # 创建标准 Android 项目结构
+        mkdir -p app/src/main/java/com/proxy/echapp
+        mkdir -p app/src/main/res/layout
+        mkdir -p app/src/main/res/values
+        mkdir -p app/src/main/res/drawable
+        mkdir -p app/src/main/res/mipmap-hdpi
+        mkdir -p app/src/main/res/mipmap-mdpi
+        mkdir -p app/src/main/res/mipmap-xhdpi
+        mkdir -p app/src/main/res/mipmap-xxhdpi
+        mkdir -p app/src/main/res/mipmap-xxxhdpi
+        mkdir -p echlib/src/main/java/com/proxy/echlib
+        
+    - name: Create root build.gradle
+      run: |
+        cat > build.gradle << 'EOF'
+        buildscript {
+            repositories {
+                google()
+                mavenCentral()
+            }
+            dependencies {
+                classpath 'com.android.tools.build:gradle:8.2.0'
+                classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20'
+            }
+        }
+
+        allprojects {
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
+
+        task clean(type: Delete) {
+            delete rootProject.buildDir
+        }
+        EOF
+        
+    - name: Create settings.gradle
+      run: |
+        cat > settings.gradle << 'EOF'
+        rootProject.name = "ECH Proxy"
+        include ':app'
+        include ':echlib'
+        EOF
+        
+    - name: Create gradle.properties
+      run: |
+        cat > gradle.properties << 'EOF'
+        org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+        android.useAndroidX=true
+        android.enableJetifier=true
+        kotlin.code.style=official
+        EOF
+        
+    - name: Create app build.gradle
+      run: |
+        cat > app/build.gradle << 'EOF'
+        plugins {
+            id 'com.android.application'
+            id 'org.jetbrains.kotlin.android'
+        }
+
+        android {
+            namespace 'com.proxy.echapp'
+            compileSdk 34
+
+            defaultConfig {
+                applicationId "com.proxy.echapp"
+                minSdk 24
+                targetSdk 34
+                versionCode 1
+                versionName "1.0"
+            }
+
+            buildTypes {
+                release {
+                    minifyEnabled false
+                    proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                }
+            }
+            
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_1_8
+                targetCompatibility JavaVersion.VERSION_1_8
+            }
+            
+            kotlinOptions {
+                jvmTarget = '1.8'
+            }
+            
+            buildFeatures {
+                viewBinding true
+            }
+        }
+
+        dependencies {
+            implementation project(':echlib')
+            implementation 'androidx.core:core-ktx:1.12.0'
+            implementation 'androidx.appcompat:appcompat:1.6.1'
+            implementation 'com.google.android.material:material:1.11.0'
+            implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+            implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+        }
+        EOF
+        
+    - name: Create library build.gradle
+      run: |
+        cat > echlib/build.gradle << 'EOF'
+        plugins {
+            id 'com.android.library'
+            id 'org.jetbrains.kotlin.android'
+        }
+
+        android {
+            namespace 'com.proxy.echlib'
+            compileSdk 34
+
+            defaultConfig {
+                minSdk 24
+                targetSdk 34
+            }
+
+            buildTypes {
+                release {
+                    minifyEnabled false
+                }
+            }
+            
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_1_8
+                targetCompatibility JavaVersion.VERSION_1_8
+            }
+            
+            kotlinOptions {
+                jvmTarget = '1.8'
+            }
+        }
+
+        dependencies {
+            implementation 'androidx.core:core-ktx:1.12.0'
+            implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+            implementation 'org.java-websocket:Java-WebSocket:1.5.4'
+            implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+            implementation 'dnsjava:dnsjava:3.5.2'
+        }
+        EOF
+        
+    - name: Create AndroidManifest.xml
+      run: |
+        cat > app/src/main/AndroidManifest.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+            <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+            <application
+                android:allowBackup="true"
+                android:icon="@mipmap/ic_launcher"
+                android:label="ECH Proxy"
+                android:theme="@style/AppTheme"
+                android:usesCleartextTraffic="true">
+                <activity
+                    android:name=".MainActivity"
+                    android:exported="true">
+                    <intent-filter>
+                        <action android:name="android.intent.action.MAIN" />
+                        <category android:name="android.intent.category.LAUNCHER" />
+                    </intent-filter>
+                </activity>
+                
+                <service
+                    android:name=".ProxyService"
+                    android:enabled="true"
+                    android:exported="false" />
+            </application>
+
+        </manifest>
+        EOF
+        
+    - name: Create MainActivity.kt
+      run: |
+        cat > app/src/main/java/com/proxy/echapp/MainActivity.kt << 'EOF'
+        package com.proxy.echapp
+
+        import android.content.Intent
+        import android.os.Bundle
+        import android.view.View
+        import android.widget.Toast
+        import androidx.appcompat.app.AppCompatActivity
+        import com.proxy.echapp.databinding.ActivityMainBinding
+
+        class MainActivity : AppCompatActivity() {
+            private lateinit var binding: ActivityMainBinding
+            private var isRunning = false
+            private var isAdvancedExpanded = false
+
+            override fun onCreate(savedInstanceState: Bundle?) {
+                super.onCreate(savedInstanceState)
+                binding = ActivityMainBinding.inflate(layoutInflater)
+                setContentView(binding.root)
+
+                loadConfig()
+                setupUI()
+            }
+
+            private fun setupUI() {
+                // 模式切换
+                binding.rgMode.setOnCheckedChangeListener { _, checkedId ->
+                    when (checkedId) {
+                        R.id.rbClient -> switchToClientMode()
+                        R.id.rbServer -> switchToServerMode()
+                    }
+                }
+
+                // 高级选项折叠
+                binding.tvAdvanced.setOnClickListener {
+                    toggleAdvancedOptions()
+                }
+
+                // 按钮事件
+                binding.btnStart.setOnClickListener {
+                    if (isRunning) {
+                        stopProxy()
+                    } else {
+                        startProxy()
+                    }
+                }
+
+                binding.btnSave.setOnClickListener {
+                    saveConfig()
+                }
+
+                binding.btnTest.setOnClickListener {
+                    testConnection()
+                }
+
+                // 初始化为客户端模式
+                switchToClientMode()
+            }
+
+            private fun switchToClientMode() {
+                binding.tvMode.text = "客户端模式"
+                binding.etListenAddr.hint = "proxy://127.0.0.1:1080"
+                binding.tvServerLabel.visibility = View.VISIBLE
+                binding.etServer.visibility = View.VISIBLE
+                binding.tvCfIpLabel.visibility = View.VISIBLE
+                binding.etCfIp.visibility = View.VISIBLE
+                binding.tvCidrLabel.visibility = View.GONE
+                binding.etCidr.visibility = View.GONE
+            }
+
+            private fun switchToServerMode() {
+                binding.tvMode.text = "服务端模式"
+                binding.etListenAddr.hint = "wss://0.0.0.0:443/ws"
+                binding.tvServerLabel.visibility = View.GONE
+                binding.etServer.visibility = View.GONE
+                binding.tvCfIpLabel.visibility = View.GONE
+                binding.etCfIp.visibility = View.GONE
+                binding.tvCidrLabel.visibility = View.VISIBLE
+                binding.etCidr.visibility = View.VISIBLE
+            }
+
+            private fun toggleAdvancedOptions() {
+                isAdvancedExpanded = !isAdvancedExpanded
+                if (isAdvancedExpanded) {
+                    binding.tvAdvanced.text = "▼ 高级选项"
+                    binding.layoutAdvanced.visibility = View.VISIBLE
+                } else {
+                    binding.tvAdvanced.text = "▶ 高级选项"
+                    binding.layoutAdvanced.visibility = View.GONE
+                }
+            }
+
+            private fun startProxy() {
+                val listenAddr = binding.etListenAddr.text.toString()
+                val server = binding.etServer.text.toString()
+                val token = binding.etToken.text.toString()
+                val connections = binding.etConnections.text.toString()
+                val cfIp = binding.etCfIp.text.toString()
+                val dns = binding.etDns.text.toString()
+                val echDomain = binding.etEchDomain.text.toString()
+                val cidr = binding.etCidr.text.toString()
+                val isClient = binding.rbClient.isChecked
+
+                // 验证必填项
+                if (listenAddr.isEmpty()) {
+                    Toast.makeText(this, "请填写监听地址", Toast.LENGTH_SHORT).show()
+                    return
+                }
+
+                if (token.length < 6) {
+                    Toast.makeText(this, "Token 建议至少 6 位", Toast.LENGTH_SHORT).show()
+                    return
+                }
+
+                if (isClient && server.isEmpty()) {
+                    Toast.makeText(this, "客户端模式需要填写服务端地址", Toast.LENGTH_SHORT).show()
+                    return
+                }
+
+                val intent = Intent(this, ProxyService::class.java).apply {
+                    putExtra("isClient", isClient)
+                    putExtra("listenAddr", listenAddr)
+                    putExtra("server", server)
+                    putExtra("token", token)
+                    putExtra("connections", connections.toIntOrNull() ?: 3)
+                    putExtra("cfIp", cfIp)
+                    putExtra("dns", dns.ifEmpty { "119.29.29.29:53" })
+                    putExtra("echDomain", echDomain.ifEmpty { "cloudflare-ech.com" })
+                    putExtra("cidr", cidr.ifEmpty { "0.0.0.0/0,::/0" })
+                }
+
+                startService(intent)
+                isRunning = true
+                updateRunningStatus(true)
+                Toast.makeText(this, "代理已启动", Toast.LENGTH_SHORT).show()
+            }
+
+            private fun stopProxy() {
+                stopService(Intent(this, ProxyService::class.java))
+                isRunning = false
+                updateRunningStatus(false)
+                Toast.makeText(this, "代理已停止", Toast.LENGTH_SHORT).show()
+            }
+
+            private fun updateRunningStatus(running: Boolean) {
+                if (running) {
+                    binding.btnStart.text = "停止"
+                    binding.statusText.text = "运行中"
+                    binding.statusIndicator.setBackgroundResource(
+                        android.R.drawable.presence_online
+                    )
+                } else {
+                    binding.btnStart.text = "启动"
+                    binding.statusText.text = "已停止"
+                    binding.statusIndicator.setBackgroundResource(
+                        android.R.drawable.presence_offline
+                    )
+                }
+            }
+
+            private fun loadConfig() {
+                val prefs = getSharedPreferences("proxy_config", MODE_PRIVATE)
+                binding.etListenAddr.setText(prefs.getString("listenAddr", ""))
+                binding.etServer.setText(prefs.getString("server", ""))
+                binding.etToken.setText(prefs.getString("token", ""))
+                binding.etConnections.setText(prefs.getString("connections", "3"))
+                binding.etCfIp.setText(prefs.getString("cfIp", ""))
+                binding.etDns.setText(prefs.getString("dns", "119.29.29.29:53"))
+                binding.etEchDomain.setText(prefs.getString("echDomain", "cloudflare-ech.com"))
+                binding.etCidr.setText(prefs.getString("cidr", "0.0.0.0/0,::/0"))
+                
+                val isClient = prefs.getBoolean("isClient", true)
+                if (isClient) {
+                    binding.rbClient.isChecked = true
+                } else {
+                    binding.rbServer.isChecked = true
+                }
+            }
+
+            private fun saveConfig() {
+                val prefs = getSharedPreferences("proxy_config", MODE_PRIVATE)
+                prefs.edit().apply {
+                    putBoolean("isClient", binding.rbClient.isChecked)
+                    putString("listenAddr", binding.etListenAddr.text.toString())
+                    putString("server", binding.etServer.text.toString())
+                    putString("token", binding.etToken.text.toString())
+                    putString("connections", binding.etConnections.text.toString())
+                    putString("cfIp", binding.etCfIp.text.toString())
+                    putString("dns", binding.etDns.text.toString())
+                    putString("echDomain", binding.etEchDomain.text.toString())
+                    putString("cidr", binding.etCidr.text.toString())
+                    apply()
+                }
+                Toast.makeText(this, "配置已保存", Toast.LENGTH_SHORT).show()
+            }
+
+            private fun testConnection() {
+                Toast.makeText(this, "测试连接功能开发中...", Toast.LENGTH_SHORT).show()
+                // TODO: 实现连接测试
+            }
+
+            override fun onDestroy() {
+                super.onDestroy()
+                if (isRunning) {
+                    stopService(Intent(this, ProxyService::class.java))
+                }
+            }
+        }
+        EOF
+        
+    - name: Create ProxyService.kt
+      run: |
+        cat > app/src/main/java/com/proxy/echapp/ProxyService.kt << 'EOF'
+        package com.proxy.echapp
+
+        import android.app.Service
+        import android.content.Intent
+        import android.os.IBinder
+        import android.util.Log
+        import com.proxy.echlib.ProxyManager
+
+        class ProxyService : Service() {
+            private lateinit var proxyManager: ProxyManager
+            private val TAG = "ProxyService"
+
+            override fun onCreate() {
+                super.onCreate()
+                proxyManager = ProxyManager.getInstance(this)
+                Log.d(TAG, "ProxyService created")
+            }
+
+            override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                intent?.let {
+                    val isClient = it.getBooleanExtra("isClient", true)
+                    val listenAddr = it.getStringExtra("listenAddr") ?: ""
+                    val server = it.getStringExtra("server") ?: ""
+                    val token = it.getStringExtra("token") ?: ""
+                    val connections = it.getIntExtra("connections", 3)
+                    val cfIp = it.getStringExtra("cfIp") ?: ""
+                    val dns = it.getStringExtra("dns") ?: "119.29.29.29:53"
+                    val echDomain = it.getStringExtra("echDomain") ?: "cloudflare-ech.com"
+                    val cidr = it.getStringExtra("cidr") ?: "0.0.0.0/0,::/0"
+
+                    Log.d(TAG, "Starting proxy - Mode: ${if (isClient) "Client" else "Server"}")
+                    Log.d(TAG, "Listen: $listenAddr")
+                    Log.d(TAG, "Server: $server")
+                    Log.d(TAG, "Connections: $connections")
+
+                    val config = ProxyManager.ServerConfig(
+                        listenAddr = listenAddr,
+                        forwardAddr = server,
+                        ipAddr = cfIp,
+                        token = token,
+                        cidrs = cidr,
+                        dnsServer = dns,
+                        echDomain = echDomain,
+                        connectionNum = connections
+                    )
+
+                    if (isClient) {
+                        // 客户端模式 (proxy:// 或 tcp://)
+                        if (listenAddr.startsWith("proxy://")) {
+                            proxyManager.startProxyServer(config) { success, message ->
+                                Log.d(TAG, "Proxy server: $success - $message")
+                            }
+                        } else if (listenAddr.startsWith("tcp://")) {
+                            proxyManager.startTCPClient(config) { success, message ->
+                                Log.d(TAG, "TCP client: $success - $message")
+                            }
+                        }
+                    } else {
+                        // 服务端模式 (ws:// 或 wss://)
+                        proxyManager.startWebSocketServer(config) { success, message ->
+                            Log.d(TAG, "WebSocket server: $success - $message")
+                        }
+                    }
+                }
+
+                return START_STICKY
+            }
+
+            override fun onDestroy() {
+                super.onDestroy()
+                Log.d(TAG, "ProxyService destroying...")
+                proxyManager.stopAll()
+            }
+
+            override fun onBind(intent: Intent?): IBinder? = null
+        }
+        EOF
+        
+    - name: Create activity_main.xml
+      run: |
+        cat > app/src/main/res/layout/activity_main.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+            xmlns:app="http://schemas.android.com/apk/res-auto"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#1a1a2e"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="24dp">
+
+                <!-- 状态指示器 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="24dp">
+
+                    <View
+                        android:id="@+id/statusIndicator"
+                        android:layout_width="12dp"
+                        android:layout_height="12dp"
+                        android:background="@drawable/status_indicator"
+                        android:layout_marginEnd="12dp" />
+
+                    <TextView
+                        android:id="@+id/statusText"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="已停止"
+                        android:textColor="#ffffff"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:id="@+id/tvMode"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="客户端模式"
+                        android:textColor="#888888"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <!-- 模式选择 -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="运行模式"
+                    android:textColor="#ffffff"
+                    android:textSize="14sp"
+                    android:layout_marginBottom="8dp" />
+
+                <RadioGroup
+                    android:id="@+id/rgMode"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="24dp">
+
+                    <RadioButton
+                        android:id="@+id/rbClient"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="客户端"
+                        android:textColor="#ffffff"
+                        android:checked="true" />
+
+                    <RadioButton
+                        android:id="@+id/rbServer"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="服务端"
+                        android:textColor="#ffffff" />
+                </RadioGroup>
+
+                <!-- 监听地址 (-l) -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="监听地址 (-l) *"
+                    android:textColor="#ffffff"
+                    android:textSize="14sp"
+                    android:layout_marginBottom="8dp" />
+
+                <EditText
+                    android:id="@+id/etListenAddr"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:background="@drawable/rounded_edittext"
+                    android:hint="proxy://127.0.0.1:1080"
+                    android:inputType="text"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:textColor="#ffffff"
+                    android:textColorHint="#888888"
+                    android:textSize="16sp"
+                    android:layout_marginBottom="24dp" />
+
+                <!-- 服务端地址 (-f) -->
+                <TextView
+                    android:id="@+id/tvServerLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="服务端地址 (-f) *"
+                    android:textColor="#ffffff"
+                    android:textSize="14sp"
+                    android:layout_marginBottom="8dp" />
+
+                <EditText
+                    android:id="@+id/etServer"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:background="@drawable/rounded_edittext"
+                    android:hint="wss://your.com:443/ws"
+                    android:inputType="textUri"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:textColor="#ffffff"
+                    android:textColorHint="#888888"
+                    android:textSize="16sp"
+                    android:layout_marginBottom="24dp" />
+
+                <!-- Token 密码 (-token) -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Token 密码 (-token) *"
+                    android:textColor="#ffffff"
+                    android:textSize="14sp"
+                    android:layout_marginBottom="8dp" />
+
+                <EditText
+                    android:id="@+id/etToken"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:background="@drawable/rounded_edittext"
+                    android:hint="输入您的密码 (建议6+位)"
+                    android:inputType="textPassword"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:textColor="#ffffff"
+                    android:textColorHint="#888888"
+                    android:textSize="16sp"
+                    android:layout_marginBottom="24dp" />
+
+                <!-- 连接数量 (-n) -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="连接数量 (-n)"
+                    android:textColor="#ffffff"
+                    android:textSize="14sp"
+                    android:layout_marginBottom="8dp" />
+
+                <EditText
+                    android:id="@+id/etConnections"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:background="@drawable/rounded_edittext"
+                    android:hint="3 (推荐 3~8)"
+                    android:inputType="number"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:textColor="#ffffff"
+                    android:textColorHint="#888888"
+                    android:textSize="16sp"
+                    android:layout_marginBottom="24dp" />
+
+                <!-- 高级选项折叠 -->
+                <TextView
+                    android:id="@+id/tvAdvanced"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="▶ 高级选项"
+                    android:textColor="#e91e63"
+                    android:textSize="14sp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp"
+                    android:clickable="true"
+                    android:layout_marginBottom="8dp" />
+
+                <LinearLayout
+                    android:id="@+id/layoutAdvanced"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <!-- 优选 IP (-ip) -->
+                    <TextView
+                        android:id="@+id/tvCfIpLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="优选 IP (-ip)"
+                        android:textColor="#ffffff"
+                        android:textSize="14sp"
+                        android:layout_marginBottom="8dp" />
+
+                    <EditText
+                        android:id="@+id/etCfIp"
+                        android:layout_width="match_parent"
+                        android:layout_height="56dp"
+                        android:background="@drawable/rounded_edittext"
+                        android:hint="104.16.16.16"
+                        android:inputType="text"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:textColor="#ffffff"
+                        android:textColorHint="#888888"
+                        android:textSize="16sp"
+                        android:layout_marginBottom="24dp" />
+
+                    <!-- DNS 服务器 (-dns) -->
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="DNS 服务器 (-dns)"
+                        android:textColor="#ffffff"
+                        android:textSize="14sp"
+                        android:layout_marginBottom="8dp" />
+
+                    <EditText
+                        android:id="@+id/etDns"
+                        android:layout_width="match_parent"
+                        android:layout_height="56dp"
+                        android:background="@drawable/rounded_edittext"
+                        android:hint="119.29.29.29:53"
+                        android:inputType="text"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:textColor="#ffffff"
+                        android:textColorHint="#888888"
+                        android:textSize="16sp"
+                        android:layout_marginBottom="24dp" />
+
+                    <!-- ECH 域名 (-ech) -->
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="ECH 域名 (-ech)"
+                        android:textColor="#ffffff"
+                        android:textSize="14sp"
+                        android:layout_marginBottom="8dp" />
+
+                    <EditText
+                        android:id="@+id/etEchDomain"
+                        android:layout_width="match_parent"
+                        android:layout_height="56dp"
+                        android:background="@drawable/rounded_edittext"
+                        android:hint="cloudflare-ech.com"
+                        android:inputType="text"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:textColor="#ffffff"
+                        android:textColorHint="#888888"
+                        android:textSize="16sp"
+                        android:layout_marginBottom="24dp" />
+
+                    <!-- IP 白名单 (-cidr) 仅服务端 -->
+                    <TextView
+                        android:id="@+id/tvCidrLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="IP 白名单 (-cidr)"
+                        android:textColor="#ffffff"
+                        android:textSize="14sp"
+                        android:layout_marginBottom="8dp"
+                        android:visibility="gone" />
+
+                    <EditText
+                        android:id="@+id/etCidr"
+                        android:layout_width="match_parent"
+                        android:layout_height="56dp"
+                        android:background="@drawable/rounded_edittext"
+                        android:hint="0.0.0.0/0,::/0"
+                        android:inputType="text"
+                        android:paddingStart="16dp"
+                        android:paddingEnd="16dp"
+                        android:textColor="#ffffff"
+                        android:textColorHint="#888888"
+                        android:textSize="16sp"
+                        android:layout_marginBottom="24dp"
+                        android:visibility="gone" />
+
+                </LinearLayout>
+
+                <!-- 操作按钮 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center"
+                    android:layout_marginTop="8dp">
+
+                    <Button
+                        android:id="@+id/btnStart"
+                        android:layout_width="0dp"
+                        android:layout_height="56dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/button_primary"
+                        android:text="启动"
+                        android:textColor="#ffffff"
+                        android:textSize="16sp"
+                        android:layout_marginEnd="8dp" />
+
+                    <Button
+                        android:id="@+id/btnSave"
+                        android:layout_width="0dp"
+                        android:layout_height="56dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/button_secondary"
+                        android:text="保存"
+                        android:textColor="#ffffff"
+                        android:textSize="16sp"
+                        android:layout_marginStart="8dp"
+                        android:layout_marginEnd="8dp" />
+
+                    <Button
+                        android:id="@+id/btnTest"
+                        android:layout_width="0dp"
+                        android:layout_height="56dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/button_secondary"
+                        android:text="测试"
+                        android:textColor="#ffffff"
+                        android:textSize="16sp"
+                        android:layout_marginStart="8dp" />
+                </LinearLayout>
+
+                <!-- 帮助文本 -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="💡 提示：\n• 客户端模式：监听地址格式 proxy://ip:port 或 tcp://listen/target\n• 服务端模式：监听地址格式 ws://ip:port/path 或 wss://ip:port/path\n• Token 建议使用 6 位以上密码\n• 连接数量建议 3~8 个"
+                    android:textColor="#888888"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="4dp"
+                    android:layout_marginTop="24dp" />
+
+            </LinearLayout>
+        </ScrollView>
+        EOF
+        
+    - name: Create drawable resources
+      run: |
+        # rounded_edittext.xml
+        cat > app/src/main/res/drawable/rounded_edittext.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <shape xmlns:android="http://schemas.android.com/apk/res/android">
+            <solid android:color="#2d3142" />
+            <corners android:radius="12dp" />
+            <stroke android:width="1dp" android:color="#4a5568" />
+        </shape>
+        EOF
+
+        # button_primary.xml
+        cat > app/src/main/res/drawable/button_primary.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <shape xmlns:android="http://schemas.android.com/apk/res/android">
+            <solid android:color="#e91e63" />
+            <corners android:radius="28dp" />
+        </shape>
+        EOF
+
+        # button_secondary.xml
+        cat > app/src/main/res/drawable/button_secondary.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <shape xmlns:android="http://schemas.android.com/apk/res/android">
+            <solid android:color="#4a5568" />
+            <corners android:radius="28dp" />
+        </shape>
+        EOF
+        
+        # status_indicator.xml
+        cat > app/src/main/res/drawable/status_indicator.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <shape xmlns:android="http://schemas.android.com/apk/res/android"
+            android:shape="oval">
+            <solid android:color="#888888" />
+        </shape>
+        EOF
+        
+    - name: Create values resources
+      run: |
+        cat > app/src/main/res/values/styles.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
+                <item name="colorPrimary">#e91e63</item>
+                <item name="colorPrimaryDark">#1a1a2e</item>
+                <item name="colorAccent">#e91e63</item>
+                <item name="android:windowBackground">@android:color/black</item>
+            </style>
+        </resources>
+        EOF
+
+        cat > app/src/main/res/values/strings.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <string name="app_name">ECH Proxy</string>
+        </resources>
+        EOF
+        
+    - name: Copy library source files
+      run: |
+        # 如果仓库中已有 Go 转换的 Kotlin 文件，复制它们
+        if [ -f "ProxyManager.kt" ]; then
+          cp ProxyManager.kt echlib/src/main/java/com/proxy/echlib/
+        fi
+        
+    - name: Create simple launcher icon
+      run: |
+        # 创建简单的启动图标 (使用 ImageMagick)
+        sudo apt-get update
+        sudo apt-get install -y imagemagick
+        
+        convert -size 512x512 xc:#e91e63 \
+          -gravity center \
+          -pointsize 200 \
+          -fill white \
+          -annotate +0+0 'EP' \
+          app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+        
+        convert app/src/main/res/mipmap-xxxhdpi/ic_launcher.png -resize 192x192 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+        convert app/src/main/res/mipmap-xxxhdpi/ic_launcher.png -resize 144x144 app/src/main/res/mipmap-xhdpi/ic_launcher.png
+        convert app/src/main/res/mipmap-xxxhdpi/ic_launcher.png -resize 96x96 app/src/main/res/mipmap-hdpi/ic_launcher.png
+        convert app/src/main/res/mipmap-xxxhdpi/ic_launcher.png -resize 48x48 app/src/main/res/mipmap-mdpi/ic_launcher.png
+        
+    - name: Generate keystore for signing
+      run: |
+        keytool -genkey -v -keystore release.keystore \
+          -alias release -keyalg RSA -keysize 2048 -validity 10000 \
+          -storepass android -keypass android \
+          -dname "CN=ECH Proxy, OU=Dev, O=ECH, L=City, S=State, C=US"
+        
+    - name: Create signing config
+      run: |
+        cat >> app/build.gradle << 'EOF'
+        
+        android {
+            signingConfigs {
+                release {
+                    storeFile file('../release.keystore')
+                    storePassword 'android'
+                    keyAlias 'release'
+                    keyPassword 'android'
+                }
+            }
+            
+            buildTypes {
+                release {
+                    signingConfig signingConfigs.release
+                }
+            }
+        }
+        EOF
+        
+    - name: Make gradlew executable
+      run: |
+        if [ ! -f "gradlew" ]; then
+          gradle wrapper
+        fi
+        chmod +x gradlew
+        
+    - name: Build APK
+      run: ./gradlew assembleRelease --stacktrace
+      
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-release
+        path: app/build/outputs/apk/release/app-release.apk
+        
+    - name: Create Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.${{ github.run_number }}
+        name: Release v1.0.${{ github.run_number }}
+        files: app/build/outputs/apk/release/app-release.apk
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
