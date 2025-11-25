@@ -1,19 +1,15 @@
 name: Automated Go AAR Build and Release
 
 on:
-  # 触发条件：
-  # 1. 当推送新的 Git Tag 时（例如：v1.0.0），用于正式发布。
   push:
     tags:
       - 'v*.*.*' 
-  # 2. 允许手动触发，用于测试。
   workflow_dispatch:
 
 jobs:
   build_and_release:
     runs-on: ubuntu-latest
     
-    # 授予写入权限，用于创建 Release 并上传附件
     permissions:
       contents: write 
 
@@ -27,11 +23,8 @@ jobs:
       - name: Define AAR Configuration Variables
         id: config
         run: |
-          # AAR 库名和包名。这是 Android 导入时使用的包名。
           echo "AAR_LIB_NAME=gomobileproxy" >> $GITHUB_OUTPUT
-          # 最终生成的 AAR 文件名
           echo "AAR_FILE_NAME=${{ steps.config.outputs.AAR_LIB_NAME }}.aar" >> $GITHUB_OUTPUT
-          # 修复点：指定最低 API 级别为 21，解决 API 16 不支持的问题
           echo "ANDROID_API_LEVEL=21" >> $GITHUB_OUTPUT
 
       # ----------------------------------------------------
@@ -42,17 +35,14 @@ jobs:
           AAR_LIB_NAME=${{ steps.config.outputs.AAR_LIB_NAME }}
           GO_FILE_NAME="a.go"
           
-          echo "--- 正在将 ${GO_FILE_NAME} 从 package main 转换为 package ${AAR_LIB_NAME} ---"
-          
           # 1. 替换 package main 为库包名
           sed -i "1s/package main/package ${AAR_LIB_NAME}/" ${GO_FILE_NAME}
           
           # 2. 将 func main() 重命名为 func runMain()
           sed -i 's/func main()/func runMain()/' ${GO_FILE_NAME}
           
-          # 3. 自动添加 Go 库所需的 go.mod 文件，并下载依赖
+          # 3. 自动添加 Go 库所需的 go.mod 文件
           go mod init ${AAR_LIB_NAME}
-          go mod tidy
           
           # 4. 添加导出的入口函数：Start()
           echo "" >> ${GO_FILE_NAME}
@@ -61,31 +51,30 @@ jobs:
           echo "func Start() {" >> ${GO_FILE_NAME}
           echo "    go runMain()" >> ${GO_FILE_NAME}
           echo "}" >> ${GO_FILE_NAME}
-
+          
+          # 5. 运行 go mod tidy 来下载 a.go 内部的依赖
+          go mod tidy
 
       # ----------------------------------------------------
-      # 3. 环境设置和依赖安装
+      # 3. 环境设置和依赖安装 (关键修复点)
       # ----------------------------------------------------
       - name: Set up Go and NDK
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # 修复点：直接使用 Go 1.24，满足 gomobile 的最低版本要求
+          go-version: '1.24'
           
       - name: Set up Android NDK (Required for gomobile)
         uses: android-actions/setup-android@v3
         with:
-          ndk: '25.2.9519653' # 稳定的 NDK 版本
+          ndk: '25.2.9519653' 
 
       - name: Install gomobile tools and initialize
         run: |
-          # 1. 安装 gomobile 可执行文件
-          go install golang.org/x/mobile/cmd/gomobile@latest
+          # 修复点：使用 go get 安装 gomobile，确保它和它依赖的 bind 包被正确解析到 go.mod
+          go get golang.org/x/mobile/cmd/gomobile@latest
           
-          # 2. 关键修复：显式获取 gomobile 依赖的 core 模块
-          # 确保 gobind 能找到 golang.org/x/mobile/bind 包，解决 "no Go package" 错误
-          go mod download golang.org/x/mobile
-          
-          # 3. 初始化 gomobile 环境，下载必要的 Android NDK/SDK 组件
+          # 初始化 gomobile 环境
           gomobile init
           
       # ----------------------------------------------------
@@ -93,6 +82,7 @@ jobs:
       # ----------------------------------------------------
       - name: Compile to Android AAR (ARM/ARM64)
         run: |
+          # 添加 -androidapi 参数解决 API level 过低问题
           gomobile bind \
             -target=android/arm,android/arm64 \
             -androidapi ${{ steps.config.outputs.ANDROID_API_LEVEL }} \
