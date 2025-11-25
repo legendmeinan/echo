@@ -1,0 +1,117 @@
+name: Automated Go AAR Build and Release
+
+on:
+  # 触发条件：
+  # 1. 当推送新的 Git Tag 时（例如：v1.0.0），用于正式发布。
+  push:
+    tags:
+      - 'v*.*.*' 
+  # 2. 允许手动触发，用于测试。
+  workflow_dispatch:
+
+jobs:
+  build_and_release:
+    runs-on: ubuntu-latest
+    
+    # 授予写入权限，用于创建 Release 并上传附件
+    permissions:
+      contents: write 
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ----------------------------------------------------
+      # 1. 定义核心配置变量
+      # ----------------------------------------------------
+      - name: Define AAR Configuration Variables
+        id: config
+        run: |
+          # AAR 库名和包名。这是 Android 导入时使用的包名。
+          echo "AAR_LIB_NAME=gomobileproxy" >> $GITHUB_OUTPUT
+          # 最终生成的 AAR 文件名
+          echo "AAR_FILE_NAME=${{ steps.config.outputs.AAR_LIB_NAME }}.aar" >> $GITHUB_OUTPUT
+
+      # ----------------------------------------------------
+      # 2. 自动处理 Go 源码 (变量/包名处理)
+      # ----------------------------------------------------
+      - name: Automated Go Source Refactoring (Package and Entry Point)
+        run: |
+          AAR_LIB_NAME=${{ steps.config.outputs.AAR_LIB_NAME }}
+          GO_FILE_NAME="a.go"
+          
+          echo "--- 正在将 ${GO_FILE_NAME} 从 package main 转换为 package ${AAR_LIB_NAME} ---"
+          
+          # 1. 替换 package main 为库包名 (处理包名变量)
+          sed -i "1s/package main/package ${AAR_LIB_NAME}/" ${GO_FILE_NAME}
+          
+          # 2. 将 func main() 重命名为 func runMain() (处理主函数名变量)
+          sed -i 's/func main()/func runMain()/' ${GO_FILE_NAME}
+          
+          # 3. 自动添加 Go 库所需的 go.mod 文件，并下载依赖
+          go mod init ${AAR_LIB_NAME}
+          go mod tidy
+          
+          # 4. 在文件末尾追加 Android 调用的**导出的**入口函数：Start()
+          echo "" >> ${GO_FILE_NAME}
+          echo "// Start is the mandatory entry point for Android, exposed by gomobile bind." >> ${GO_FILE_NAME}
+          echo "// It runs the original main logic in a new goroutine to avoid blocking the UI thread." >> ${GO_FILE_NAME}
+          echo "func Start() {" >> ${GO_FILE_NAME}
+          echo "    go runMain()" >> ${GO_FILE_NAME}
+          echo "}" >> ${GO_FILE_NAME}
+          
+          echo "--- 确认修改后的 ${GO_FILE_NAME} 头部和尾部片段 ---"
+          head -n 5 ${GO_FILE_NAME}
+          tail -n 10 ${GO_FILE_NAME}
+
+      # ----------------------------------------------------
+      # 3. 环境设置和编译
+      # ----------------------------------------------------
+      - name: Set up Go and NDK
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          
+      - name: Set up Android NDK (Required for gomobile)
+        uses: android-actions/setup-android@v3
+        with:
+          ndk: '25.2.9519653' 
+
+      - name: Install gomobile tools and init
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+          
+      - name: Compile to Android AAR (ARM/ARM64)
+        run: |
+          # 编译 Go 库为 Android AAR，支持 ARM 32位和 64位
+          gomobile bind \
+            -target=android/arm,android/arm64 \
+            -v \
+            -o ${{ steps.config.outputs.AAR_FILE_NAME }} \
+            ./ 
+            
+      # ----------------------------------------------------
+      # 4. 创建 Release 并上传文件
+      # ----------------------------------------------------
+      - name: Create Release and Upload AAR
+        uses: softprops/action-gh-release@v1
+        # 仅在推送 tag 时才创建 Release
+        if: startsWith(github.ref, 'refs/tags/') 
+        with:
+          files: ${{ steps.config.outputs.AAR_FILE_NAME }} 
+          name: Release ${{ github.ref_name }}
+          body: |
+            🎉 **Go AAR 自动化构建成功**
+
+            **库名:** ${{ steps.config.outputs.AAR_LIB_NAME }}
+            **文件名:** ${{ steps.config.outputs.AAR_FILE_NAME }}
+
+            **集成说明：**
+            1.  将 AAR 文件导入 Android 项目。
+            2.  在 Java/Kotlin 中通过 `import ${{ steps.config.outputs.AAR_LIB_NAME }}` 导入。
+            3.  调用 `{{ steps.config.outputs.AAR_LIB_NAME }}.Start()` 来运行您原先 `a.go` 中的逻辑。
+            
+            ⚠️ **注意：** 原代码中的 `listenAddr` 等全局变量是内部的，无法直接通过 Android 调用进行配置。
+          draft: false
+          prerelease: false
