@@ -56,12 +56,11 @@ jobs:
           go mod tidy
 
       # ----------------------------------------------------
-      # 3. 环境设置和依赖安装 (已修正 Go 版本和依赖问题)
+      # 3. 环境设置和依赖安装
       # ----------------------------------------------------
       - name: Set up Go and NDK
         uses: actions/setup-go@v5
         with:
-          # 修复点：直接使用 Go 1.24
           go-version: '1.24'
           
       - name: Set up Android NDK (Required for gomobile)
@@ -70,12 +69,12 @@ jobs:
           ndk: '25.2.9519653' 
 
       # ----------------------------------------------------
-      # 4. 安装 gomobile 工具和初始化 (关键修复点：设置 PATH)
+      # 4. 安装 gomobile 工具和初始化 (关键修复点：全局设置 PATH)
       # ----------------------------------------------------
-      - name: Install gomobile tools and initialize
+      - name: Install gomobile tools and initialize (Fix PATH)
         run: |
-          # 修复点：将 Go 的二进制目录添加到 PATH，确保 gomobile 命令可被找到
-          export PATH=$PATH:$(go env GOPATH)/bin
+          # 修复点：将 Go 的二进制目录添加到 GitHub Actions 的全局 PATH
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
           
           # 安装 gomobile
           go get golang.org/x/mobile/cmd/gomobile@latest
@@ -88,10 +87,7 @@ jobs:
       # ----------------------------------------------------
       - name: Compile to Android AAR (ARM/ARM64)
         run: |
-          # 修复点：确保 PATH 仍然包含 gomobile
-          export PATH=$PATH:$(go env GOPATH)/bin
-          
-          # 编译命令
+          # 此时 gomobile 应该在 PATH 中，无需手动 export
           gomobile bind \
             -target=android/arm,android/arm64 \
             -androidapi ${{ steps.config.outputs.ANDROID_API_LEVEL }} \
