@@ -56,12 +56,12 @@ jobs:
           go mod tidy
 
       # ----------------------------------------------------
-      # 3. 环境设置和依赖安装 (关键修复点)
+      # 3. 环境设置和依赖安装 (已修正 Go 版本和依赖问题)
       # ----------------------------------------------------
       - name: Set up Go and NDK
         uses: actions/setup-go@v5
         with:
-          # 修复点：直接使用 Go 1.24，满足 gomobile 的最低版本要求
+          # 修复点：直接使用 Go 1.24
           go-version: '1.24'
           
       - name: Set up Android NDK (Required for gomobile)
@@ -69,20 +69,29 @@ jobs:
         with:
           ndk: '25.2.9519653' 
 
+      # ----------------------------------------------------
+      # 4. 安装 gomobile 工具和初始化 (关键修复点：设置 PATH)
+      # ----------------------------------------------------
       - name: Install gomobile tools and initialize
         run: |
-          # 修复点：使用 go get 安装 gomobile，确保它和它依赖的 bind 包被正确解析到 go.mod
+          # 修复点：将 Go 的二进制目录添加到 PATH，确保 gomobile 命令可被找到
+          export PATH=$PATH:$(go env GOPATH)/bin
+          
+          # 安装 gomobile
           go get golang.org/x/mobile/cmd/gomobile@latest
           
           # 初始化 gomobile 环境
           gomobile init
           
       # ----------------------------------------------------
-      # 4. 编译 AAR
+      # 5. 编译 AAR
       # ----------------------------------------------------
       - name: Compile to Android AAR (ARM/ARM64)
         run: |
-          # 添加 -androidapi 参数解决 API level 过低问题
+          # 修复点：确保 PATH 仍然包含 gomobile
+          export PATH=$PATH:$(go env GOPATH)/bin
+          
+          # 编译命令
           gomobile bind \
             -target=android/arm,android/arm64 \
             -androidapi ${{ steps.config.outputs.ANDROID_API_LEVEL }} \
@@ -91,7 +100,7 @@ jobs:
             ./ 
             
       # ----------------------------------------------------
-      # 5. 创建 Release 并上传文件
+      # 6. 创建 Release 并上传文件
       # ----------------------------------------------------
       - name: Create Release and Upload AAR
         uses: softprops/action-gh-release@v1
